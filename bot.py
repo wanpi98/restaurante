@@ -1,447 +1,511 @@
-# bot.py
-import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, CallbackContext, CallbackQueryHandler, ConversationHandler, MessageHandler, filters
+import json
+import random
+import datetime
+from typing import List, Dict, Any, Optional
+from supabase import create_client, Client
 from config import Config
-from database import Database
 
-# Configurar logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# Estados de conversación
-MESA, CATEGORIA, PRODUCTO, CANTIDAD, CONFIRMAR = range(5)
-
-class RestaurantBot:
-    def __init__(self):
-        self.db = Database()
-        self.application = Application.builder().token(Config.BOT_TOKEN).build()
-        self.setup_handlers()
+class Database:
+    _instance = None
+    _client: Client = None
     
-    def setup_handlers(self):
-        """Configurar manejadores de comandos básicos"""
-        # Comandos de inicio
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("help", self.help))
-        self.application.add_handler(CommandHandler("menu", self.menu))
-        self.application.add_handler(CommandHandler("categoria", self.ver_categoria))
-        self.application.add_handler(CommandHandler("carrito", self.ver_carrito))
-        self.application.add_handler(CommandHandler("pedir", self.confirmar_pedido))
-        self.application.add_handler(CommandHandler("limpiar", self.limpiar_carrito))
-        
-        # Para agregar productos: /agregar [numero]
-        self.application.add_handler(CommandHandler("agregar", self.agregar_al_carrito))
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(Database, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
     
-    async def start(self, update: Update, context: CallbackContext) -> None:
-        """Manejar comando /start"""
-        user = update.effective_user
-        
-        # Registrar usuario en base de datos
-        self.db.get_or_create_user(
-            telegram_id=user.id,
-            full_name=user.full_name
-        )
-        # ... resto del código
-        
-        # Verificar si hay argumento (mesa desde QR)
-        args = context.args
-        if args and len(args) > 0:
-            mesa = args[0]  # Ej: "mesa_5", "barra_1", "terraza_3"
-            context.user_data['mesa_actual'] = mesa
-            welcome_text = f"""¡Hola {user.first_name}! 👋
-
-Bienvenido al sistema de pedidos del restaurante.
-
-✅ Mesa registrada: *{mesa}*
-
-📋 *Comandos disponibles:*
-/menu - Ver el menú disponible
-/help - Ver ayuda
-
-Para hacer un pedido, primero ve el menú con /menu
-"""
-        else:
-            # Si no hay código QR, pedir que escanee
-            welcome_text = f"""¡Hola {user.first_name}! 👋
-
-Bienvenido al sistema de pedidos del restaurante.
-
-📍 Para comenzar, necesitas:
-1. Escanear el código QR de tu mesa
-2. O escribe el número de tu mesa
-
-Por favor, escanea el código QR o escribe tu mesa así:
-/start mesa_5
-/start barra_2
-/start terraza_1
-"""
-        await update.message.reply_text(welcome_text, parse_mode='Markdown')
-    
-    async def help(self, update: Update, context: CallbackContext) -> None:
-        """Manejar comando /help"""
-        help_text = """
-*Ayuda del sistema:*
-
-👤 *Cliente:*
-/start [mesa] - Iniciar o registrar mesa
-/menu - Ver categorías de productos
-/categoria [número] - Ver productos de una categoría
-/agregar [número] - Agregar producto al carrito
-/carrito - Ver carrito actual
-/pedir - Confirmar y enviar pedido
-/limpiar - Vaciar carrito
-/ayuda - Ver esta ayuda
-
-👨‍🍳 *Dependiente:*
-/pedidos - Ver pedidos pendientes
-/estadisticas - Ver estadísticas
-/activar - Activar modo dependiente
-/desactivar - Desactivar modo dependiente
-
-👑 *Administrador:*
-/admin - Panel de administración
-/admin_productos - Gestionar productos
-/admin_usuarios - Gestionar usuarios
-/admin_estadisticas - Ver estadísticas completas
-"""
-        await update.message.reply_text(help_text, parse_mode='Markdown')
-    
-    async def menu(self, update: Update, context: CallbackContext) -> None:
-        """Mostrar menú categoría por categoría"""
+    def _initialize(self):
+        """Inicializar conexión a Supabase"""
         try:
-            # Obtener categorías únicas
-            from collections import defaultdict
-            products = self.db.get_all_products()
-            
-            if not products:
-                await update.message.reply_text("📭 El menú está vacío en este momento.")
-                return
-            
-            # Agrupar por categoría
-            by_category = defaultdict(list)
-            for product in products:
-                category = product.get('category', 'General')
-                by_category[category].append(product)
-            
-            # Crear respuesta
-            categories_list = list(by_category.keys())
-            context.user_data['categorias_menu'] = categories_list
-            
-            response = "📁 *SELECCIONA UNA CATEGORÍA*\n\n"
-            response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            
-            for i, category in enumerate(categories_list, 1):
-                # Contar productos en esta categoría
-                count = len(by_category[category])
-                response += f"`{i}.` *{category}* - ({count} productos)\n"
-            
-            response += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            response += "Para ver productos de una categoría, escribe:\n"
-            response += "`/categoria [número]`\n"
-            response += "Ejemplo: `/categoria 1`\n"
-            response += "O usa /help para ver todos los comandos."
-            
-            await update.message.reply_text(response, parse_mode='Markdown')
-            
+            self._client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
+            print("✅ Conexión a Supabase establecida")
         except Exception as e:
-            logger.error(f"Error al obtener menú: {e}")
-            await update.message.reply_text("❌ Error al cargar el menú.")
+            print(f"❌❌ Error conectando a Supabase: {e}")
+            raise
     
-    async def ver_categoria(self, update: Update, context: CallbackContext) -> None:
-        """Ver productos de una categoría específica"""
+    # ===== MÉTODOS GENERALES =====
+    def test_connection(self):
+        """Probar conexión a la base de datos"""
         try:
-            if not context.args:
-                # Si no se especifica categoría, mostrar instrucciones
-                response = "📁 *Para ver productos de una categoría:*\n\n"
-                response += "Escribe: `/categoria [número]`\n"
-                response += "Ejemplo: `/categoria 1`\n\n"
-                response += "Primero usa /menu para ver las categorías disponibles."
-                await update.message.reply_text(response, parse_mode='Markdown')
-                return
-            
-            # Obtener número de categoría
-            try:
-                categoria_num = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("❌ Debes ingresar un número. Ejemplo: /categoria 1")
-                return
-            
-            # Obtener todas las categorías
-            from collections import defaultdict
-            products = self.db.get_all_products()
-            by_category = defaultdict(list)
-            for product in products:
-                category = product.get('category', 'General')
-                by_category[category].append(product)
-            
-            categories_list = list(by_category.keys())
-            
-            # Validar número
-            if categoria_num < 1 or categoria_num > len(categories_list):
-                await update.message.reply_text(f"❌ Número inválido. Usa un número entre 1 y {len(categories_list)}")
-                return
-            
-            categoria_nombre = categories_list[categoria_num - 1]
-            productos_categoria = by_category[categoria_nombre]
-            
-            # Guardar en context para referencias futuras
-            context.user_data['ultima_categoria'] = categoria_nombre
-            context.user_data['productos_actuales'] = productos_categoria
-            
-            # Crear respuesta
-            response = f"🍽️ *{categoria_nombre.upper()}*\n\n"
-            response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            
-            for i, producto in enumerate(productos_categoria, 1):
-                nombre = producto.get('name', 'Sin nombre')
-                precio = producto.get('price', 0)
-                descripcion = producto.get('description', '')
-                
-                # Formatear respuesta
-                response += f"`{i}.` *{nombre}* - `${precio:.2f}`\n"
-                if descripcion:
-                    response += f"    _{descripcion}_\n"
-                response += f"    `/agregar {i}`\n\n"
-            
-            response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            response += "Para agregar al carrito, usa:\n"
-            response += "`/agregar [número_producto]`\n"
-            response += "Ejemplo: `/agregar 1`\n\n"
-            response += "Usa /menu para volver a categorías\n"
-            response += "Usa /carrito para ver tu pedido"
-            
-            await update.message.reply_text(response, parse_mode='Markdown')
-            
+            response = self._client.table("users").select("count", count="exact").limit(1).execute()
+            print("✅ Conexión a base de datos verificada")
+            return True
         except Exception as e:
-            logger.error(f"Error al obtener categoría: {e}")
-            await update.message.reply_text("❌ Error al cargar la categoría.")
+            print(f"❌❌ Error en conexión: {e}")
+            return False
     
-    async def agregar_al_carrito(self, update: Update, context: CallbackContext) -> None:
-        """Agregar producto al carrito"""
+    # ===== USUARIOS =====
+    def get_user(self, telegram_id: int) -> Optional[Dict]:
+        """Obtener usuario por Telegram ID"""
         try:
-            # Verificar que el usuario esté en una mesa
-            if 'mesa_actual' not in context.user_data:
-                await update.message.reply_text(
-                    "❌ Primero necesitas registrar una mesa.\n"
-                    "1. Escanea el código QR de tu mesa\n"
-                    "2. O inicia con: /start mesa_1"
-                )
-                return
+            response = self._client.table("users")\
+                .select("*")\
+                .eq("telegram_id", telegram_id)\
+                .execute()
             
-            if not context.args:
-                await update.message.reply_text(
-                    "❌ Debes especificar un número de producto.\n"
-                    "Ejemplo: /agregar 1\n\n"
-                    "Usa primero /categoria [número] para ver los productos."
-                )
-                return
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al obtener usuario: {e}")
+            return None
+    
+    def get_or_create_user(self, telegram_id: int, full_name: str, role: str = "cliente") -> Dict:
+        """Obtener o crear usuario si no existe"""
+        try:
+            # Intentar obtener usuario existente
+            response = self._client.table("users")\
+                .select("*")\
+                .eq("telegram_id", telegram_id)\
+                .execute()
             
-            # Obtener número de producto
-            try:
-                producto_num = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("❌ Debes ingresar un número. Ejemplo: /agregar 1")
-                return
+            if response.data:
+                return response.data[0]
             
-            # Verificar que tenemos productos en contexto
-            if 'productos_actuales' not in context.user_data:
-                await update.message.reply_text(
-                    "❌ Primero debes seleccionar una categoría.\n"
-                    "Usa /menu para ver categorías disponibles."
-                )
-                return
-            
-            productos = context.user_data['productos_actuales']
-            
-            # Validar número
-            if producto_num < 1 or producto_num > len(productos):
-                await update.message.reply_text(
-                    f"❌ Número inválido. Usa un número entre 1 y {len(productos)}"
-                )
-                return
-            
-            # Obtener producto seleccionado
-            producto = productos[producto_num - 1]
-            producto_id = producto.get('id')
-            nombre = producto.get('name', 'Sin nombre')
-            precio = producto.get('price', 0)
-            
-            # Obtener cantidad (opcional)
-            cantidad = 1
-            if len(context.args) > 1:
-                try:
-                    cantidad = int(context.args[1])
-                    if cantidad < 1:
-                        cantidad = 1
-                except ValueError:
-                    cantidad = 1
-            
-            # Inicializar carrito si no existe
-            if 'carrito' not in context.user_data:
-                context.user_data['carrito'] = []
-            
-            # Agregar al carrito
-            item_carrito = {
-                'id': producto_id,
-                'nombre': nombre,
-                'precio': precio,
-                'cantidad': cantidad
+            # Crear nuevo usuario
+            user_data = {
+                "telegram_id": telegram_id,
+                "full_name": full_name,
+                "role": role
             }
             
-            # Buscar si ya existe en el carrito
-            encontrado = False
-            for item in context.user_data['carrito']:
-                if item['id'] == producto_id:
-                    item['cantidad'] += cantidad
-                    encontrado = True
-                    break
+            response = self._client.table("users")\
+                .insert(user_data)\
+                .execute()
             
-            if not encontrado:
-                context.user_data['carrito'].append(item_carrito)
-            
-            await update.message.reply_text(
-                f"✅ *{nombre}*\n"
-                f"📦 Cantidad: {cantidad}\n"
-                f"💰 Total: ${precio * cantidad:.2f}\n\n"
-                f"Añadido al carrito correctamente.\n\n"
-                f"Usa /carrito para ver tu pedido\n"
-                f"Usa /pedir para confirmar el pedido",
-                parse_mode='Markdown'
-            )
+            return response.data[0] if response.data else None
             
         except Exception as e:
-            logger.error(f"Error al agregar al carrito: {e}")
-            await update.message.reply_text("❌ Error al agregar al carrito.")
-    
-    async def ver_carrito(self, update: Update, context: CallbackContext) -> None:
-        """Ver contenido del carrito"""
+            print(f"❌❌ Error al crear usuario: {e}")
+            return None
+        
+    def update_user_role(self, telegram_id: int, role: str) -> Optional[Dict]:
+        """Actualizar rol de usuario (solo admin)"""
         try:
-            # Verificar que hay carrito
-            if 'carrito' not in context.user_data or not context.user_data['carrito']:
-                await update.message.reply_text(
-                    "🛒 Tu carrito está vacío.\n\n"
-                    "Para agregar productos:\n"
-                    "1. Usa /menu para ver categorías\n"
-                    "2. Usa /categoria [número] para ver productos\n"
-                    "3. Usa /agregar [número] para añadir al carrito"
-                )
-                return
+            response = self._client.table("users")\
+                .update({"role": role})\
+                .eq("telegram_id", telegram_id)\
+                .execute()
             
-            carrito = context.user_data['carrito']
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al actualizar rol: {e}")
+            return None
+    
+    def update_user_status(self, telegram_id: int, is_active: bool) -> Optional[Dict]:
+        """Actualizar estado de actividad de usuario"""
+        update_data = {"is_active": is_active}
+        
+        if is_active:
+            update_data["last_active"] = datetime.datetime.now().isoformat()
+        
+        try:
+            response = self._client.table("users")\
+                .update(update_data)\
+                .eq("telegram_id", telegram_id)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al actualizar estado: {e}")
+            return None
+    
+    def get_active_attendants(self) -> List[Dict]:
+        """Obtener dependientes activos"""
+        try:
+            response = self._client.table("users")\
+                .select("*")\
+                .eq("role", "dependiente")\
+                .eq("is_active", True)\
+                .execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener dependientes activos: {e}")
+            return []
+    
+    def get_all_attendants(self) -> List[Dict]:
+        """Obtener todos los dependientes"""
+        try:
+            response = self._client.table("users")\
+                .select("*")\
+                .eq("role", "dependiente")\
+                .order("full_name")\
+                .execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener dependientes: {e}")
+            return []
+    
+    def get_all_users(self) -> List[Dict]:
+        """Obtener todos los usuarios (solo admin)"""
+        try:
+            response = self._client.table("users")\
+                .select("*")\
+                .order("created_at", desc=True)\
+                .execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener usuarios: {e}")
+            return []
+    
+    # ===== PRODUCTOS =====
+    def get_product(self, product_id: int) -> Optional[Dict]:
+        """Obtener un producto por ID"""
+        try:
+            response = self._client.table("products")\
+                .select("*")\
+                .eq("id", product_id)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al obtener producto: {e}")
+            return None
+    
+    def get_all_products(self, available_only: bool = True) -> List[Dict]:
+        """Obtener todos los productos"""
+        try:
+            query = self._client.table("products").select("*")
+            
+            if available_only:
+                query = query.eq("is_available", True)
+            
+            response = query.order("category").order("name").execute()
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener productos: {e}")
+            return []
+    
+    def get_products_by_category(self, category: str) -> List[Dict]:
+        """Obtener productos por categoría"""
+        try:
+            response = self._client.table("products")\
+                .select("*")\
+                .eq("category", category)\
+                .eq("is_available", True)\
+                .order("name")\
+                .execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener productos por categoría: {e}")
+            return []
+    
+    def create_product(self, name: str, price: float, category: str, 
+                      description: str = None) -> Optional[Dict]:
+        """Crear nuevo producto"""
+        try:
+            product_data = {
+                "name": name,
+                "price": price,
+                "category": category,
+                "is_available": True
+            }
+            
+            if description:
+                product_data["description"] = description
+            
+            response = self._client.table("products")\
+                .insert(product_data)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al crear producto: {e}")
+            return None
+    
+    def update_product(self, product_id: int, **kwargs) -> Optional[Dict]:
+        """Actualizar producto"""
+        try:
+            response = self._client.table("products")\
+                .update(kwargs)\
+                .eq("id", product_id)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al actualizar producto: {e}")
+            return None
+    
+    def toggle_product_availability(self, product_id: int) -> Optional[Dict]:
+        """Activar/desactivar producto"""
+        product = self.get_product(product_id)
+        if not product:
+            return None
+        
+        new_status = not product.get("is_available", True)
+        
+        try:
+            response = self._client.table("products")\
+                .update({"is_available": new_status})\
+                .eq("id", product_id)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al cambiar estado del producto: {e}")
+            return None
+    
+    def delete_product(self, product_id: int) -> bool:
+        """Eliminar producto permanentemente (cuidado)"""
+        try:
+            response = self._client.table("products")\
+                .delete()\
+                .eq("id", product_id)\
+                .execute()
+            
+            return len(response.data) > 0
+        except Exception as e:
+            print(f"❌❌ Error al eliminar producto: {e}")
+            return False
+    
+    def get_categories(self) -> List[str]:
+        """Obtener lista de categorías únicas"""
+        try:
+            response = self._client.table("products")\
+                .select("category")\
+                .execute()
+            
+            # Extraer categorías únicas
+            categories = set()
+            for product in response.data:
+                if product.get("category"):
+                    categories.add(product["category"])
+            
+            return sorted(list(categories))
+        except Exception as e:
+            print(f"❌❌ Error al obtener categorías: {e}")
+            return []
+    
+    # ===== PEDIDOS =====
+    def generate_order_code(self) -> str:
+        """Generar código único para pedido"""
+        date_str = datetime.datetime.now().strftime("%y%m%d")
+        random_str = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=4))
+        return f"{date_str}-{random_str}"
+    
+    def create_order(self, telegram_id: int, table_number: str, 
+                    items: List[Dict], notes: str = "") -> Optional[Dict]:
+        """Crear nuevo pedido"""
+        try:
+            # Obtener usuario
+            user = self.get_user(telegram_id)
+            if not user:
+                print("❌❌ Usuario no encontrado")
+                return None
             
             # Calcular total
             total = 0
-            response = "🛒 *TU CARRITO* 🛒\n\n"
-            response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            for item in items:
+                product = self.get_product(item.get("product_id"))
+                if product:
+                    item["unit_price"] = product["price"]
+                    item["product_name"] = product["name"]
+                    total += product["price"] * item.get("quantity", 1)
             
-            for i, item in enumerate(carrito, 1):
-                subtotal = item['precio'] * item['cantidad']
-                total += subtotal
-                response += f"`{i}.` *{item['nombre']}*\n"
-                response += f"    📦 {item['cantidad']} x ${item['precio']:.2f} = ${subtotal:.2f}\n"
-                response += f"    ❌ /eliminar {i}\n\n"
+            order_data = {
+                "order_code": self.generate_order_code(),
+                "telegram_id": telegram_id,
+                "table_number": table_number,
+                "items": json.dumps(items, ensure_ascii=False),
+                "total": total,
+                "status": "pendiente",
+                "notes": notes
+            }
             
-            response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            response += f"💰 *TOTAL: ${total:.2f}*\n\n"
-            response += "📍 *Mesa:* " + context.user_data.get('mesa_actual', 'No registrada') + "\n\n"
-            response += "*Comandos disponibles:*\n"
-            response += "✅ /pedir - Confirmar y enviar pedido\n"
-            response += "🗑️ /limpiar - Vaciar carrito\n"
-            response += "📁 /menu - Seguir comprando\n"
-            response += "❌ /eliminar [número] - Eliminar producto"
+            response = self._client.table("orders")\
+                .insert(order_data)\
+                .execute()
             
-            await update.message.reply_text(response, parse_mode='Markdown')
-            
+            return response.data[0] if response.data else None
         except Exception as e:
-            logger.error(f"Error al ver carrito: {e}")
-            await update.message.reply_text("❌ Error al cargar el carrito.")
+            print(f"❌❌ Error al crear pedido: {e}")
+            return None
     
-    async def confirmar_pedido(self, update: Update, context: CallbackContext) -> None:
-        """Confirmar y enviar el pedido"""
+    def get_order(self, order_id: int) -> Optional[Dict]:
+        """Obtener pedido por ID"""
         try:
-            # Verificar que hay carrito
-            if 'carrito' not in context.user_data or not context.user_data['carrito']:
-                await update.message.reply_text(
-                    "❌ Tu carrito está vacío.\n\n"
-                    "Agrega productos con /menu y /agregar"
-                )
-                return
+            response = self._client.table("orders")\
+                .select("*")\
+                .eq("id", order_id)\
+                .execute()
             
-            # Verificar que el usuario esté en una mesa
-            if 'mesa_actual' not in context.user_data:
-                await update.message.reply_text(
-                    "❌ Primero necesitas registrar una mesa.\n"
-                    "1. Escanea el código QR de tu mesa\n"
-                    "2. O inicia con: /start mesa_1"
-                )
-                return
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al obtener pedido: {e}")
+            return None
+    
+    def get_orders_by_status(self, status: str) -> List[Dict]:
+        """Obtener pedidos por estado"""
+        try:
+            response = self._client.table("orders")\
+                .select("*")\
+                .eq("status", status)\
+                .order("created_at", desc=True)\
+                .execute()
             
-            carrito = context.user_data['carrito']
-            mesa = context.user_data['mesa_actual']
-            usuario = update.effective_user
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener pedidos: {e}")
+            return []
+    
+    def get_pending_orders(self) -> List[Dict]:
+        """Obtener pedidos pendientes"""
+        return self.get_orders_by_status("pendiente")
+    
+    def get_preparing_orders(self) -> List[Dict]:
+        """Obtener pedidos en preparación"""
+        return self.get_orders_by_status("preparando")
+    
+    def get_ready_orders(self) -> List[Dict]:
+        """Obtener pedidos listos"""
+        return self.get_orders_by_status("listo")
+    
+    def update_order_status(self, order_id: int, status: str) -> Optional[Dict]:
+        """Actualizar estado de un pedido"""
+        valid_statuses = ["pendiente", "confirmado", "preparando", "listo", "entregado", "cancelado"]
+        
+        if status not in valid_statuses:
+            print(f"❌❌ Estado no válido: {status}")
+            return None
+        
+        try:
+            response = self._client.table("orders")\
+                .update({"status": status})\
+                .eq("id", order_id)\
+                .execute()
             
-            # Calcular total
-            total = 0
-            items = []
+            return response.data[0] if response.data else None
+        except Exception as e:
+            print(f"❌❌ Error al actualizar pedido: {e}")
+            return None
+    
+    def get_user_orders(self, telegram_id: int, limit: int = 10) -> List[Dict]:
+        """Obtener pedidos de un usuario"""
+        try:
+            response = self._client.table("orders")\
+                .select("*")\
+                .eq("telegram_id", telegram_id)\
+                .order("created_at", desc=True)\
+                .limit(limit)\
+                .execute()
             
-            for item in carrito:
-                subtotal = item['precio'] * item['cantidad']
-                total += subtotal
-                items.append({
-                    'product_id': item['id'],
-                    'nombre': item['nombre'],
-                    'precio': item['precio'],
-                    'cantidad': item['cantidad']
-                })
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener pedidos del usuario: {e}")
+            return []
+    
+    def get_todays_orders(self) -> List[Dict]:
+        """Obtener pedidos de hoy"""
+        try:
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            response = self._client.table("orders")\
+                .select("*")\
+                .gte("created_at", f"{today} 00:00:00")\
+                .lte("created_at", f"{today} 23:59:59")\
+                .order("created_at", desc=True)\
+                .execute()
             
-            # Crear pedido en la base de datos
-            pedido = self.db.create_order(
-                telegram_id=usuario.id,
-                table_number=mesa,
-                items=items,
-                notes=""
-            )
+            return response.data
+        except Exception as e:
+            print(f"❌❌ Error al obtener pedidos de hoy: {e}")
+            return []
+    
+    # ===== ESTADÍSTICAS =====
+    def get_daily_stats(self, date: str = None) -> Dict[str, Any]:
+        """Obtener estadísticas del día"""
+        if not date:
+            date = datetime.datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            # Total pedidos
+            orders_response = self._client.table("orders")\
+                .select("id", count="exact")\
+                .gte("created_at", f"{date} 00:00:00")\
+                .lte("created_at", f"{date} 23:59:59")\
+                .execute()
             
-            if not pedido:
-                await update.message.reply_text("❌ Error al crear el pedido. Inténtalo de nuevo.")
-                return
+            # Total ventas
+            revenue_response = self._client.table("orders")\
+                .select("total")\
+                .gte("created_at", f"{date} 00:00:00")\
+                .lte("created_at", f"{date} 23:59:59")\
+                .execute()
             
-            # Confirmar al cliente
-            response = f"✅ *PEDIDO CONFIRMADO* ✅\n\n"
-            response += f"📦 *Código de pedido:* {pedido.get('order_code', 'N/A')}\n"
-            response += f"📍 *Mesa:* {mesa}\n"
-            response += f"👤 *Cliente:* {usuario.first_name}\n\n"
-            response += "*Productos:*\n"
+            total_orders = orders_response.count or 0
+            total_revenue = sum(order["total"] for order in revenue_response.data) if revenue_response.data else 0
             
-            for i, item in enumerate(carrito, 1):
-                subtotal = item['precio'] * item['cantidad']
-                response += f"`{i}.` {item['nombre']} - {item['cantidad']} x ${item['precio']:.2f} = ${subtotal:.2f}\n"
+            # Pedidos por estado - CORREGIDO: Usar la misma query de fecha y contar por estado
+            # Hacemos una query para obtener los pedidos del día y luego contamos por estado
+            status_response = self._client.table("orders")\
+                .select("status")\
+                .gte("created_at", f"{date} 00:00:00")\
+                .lte("created_at", f"{date} 23:59:59")\
+                .execute()
             
-            response += f"\n💰 *TOTAL: ${total:.2f}*\n\n"
-            response += "⏳ *Estado:* Pendiente\n"
-            response += "📱 Usa /estado para ver el estado de tu pedido\n"
-            response += "🔄 Usa /menu para hacer otro pedido"
+            status_counts = {}
+            for order in status_response.data:
+                status = order.get("status", "desconocido")
+                status_counts[status] = status_counts.get(status, 0) + 1
             
-            # Limpiar carrito
-            context.user_data['carrito'] = []
-            
-            await update.message.reply_text(response, parse_mode='Markdown')
+            return {
+                "date": date,
+                "total_orders": total_orders,
+                "total_revenue": total_revenue,
+                "status_counts": status_counts,
+                "avg_order_value": total_revenue / total_orders if total_orders > 0 else 0
+            }
             
         except Exception as e:
-            logger.error(f"Error al confirmar pedido: {e}")
-            await update.message.reply_text("❌ Error al confirmar el pedido.")
+            print(f"❌❌ Error al obtener estadísticas: {e}")
+            return {
+                "date": date,
+                "total_orders": 0,
+                "total_revenue": 0,
+                "status_counts": {},
+                "avg_order_value": 0
+            }
     
-    async def limpiar_carrito(self, update: Update, context: CallbackContext) -> None:
-        """Vaciar el carrito"""
-        if 'carrito' in context.user_data:
-            context.user_data['carrito'] = []
-            await update.message.reply_text("🗑️ Carrito vaciado correctamente.")
-        else:
-            await update.message.reply_text("✅ El carrito ya está vacío.")
-    
-    def run(self):
-        """Iniciar el bot"""
-        self.application.run_polling()
+    def get_top_products(self, limit: int = 5, days: int = 30) -> List[Dict]:
+        """Obtener productos más vendidos"""
+        try:
+            # Obtener pedidos de los últimos N días
+            start_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+            
+            response = self._client.table("orders")\
+                .select("items")\
+                .gte("created_at", f"{start_date} 00:00:00")\
+                .execute()
+            
+            # Contar productos
+            product_counts = {}
+            for order in response.data:
+                try:
+                    items = json.loads(order.get("items", "[]"))
+                    for item in items:
+                        product_id = item.get("product_id")
+                        quantity = item.get("quantity", 1)
+                        
+                        if product_id:
+                            if product_id not in product_counts:
+                                product_counts[product_id] = {
+                                    "product_id": product_id,
+                                    "total_quantity": 0,
+                                    "product_name": item.get("product_name", f"Producto {product_id}")
+                                }
+                            product_counts[product_id]["total_quantity"] += quantity
+                except:
+                    continue
+            
+            # Ordenar y limitar
+            top_products = sorted(product_counts.values(), 
+                                key=lambda x: x["total_quantity"], 
+                                reverse=True)[:limit]
+            
+            return top_products
+            
+        except Exception as e:
+            print(f"❌❌ Error al obtener productos más vendidos: {e}")
+            return []
