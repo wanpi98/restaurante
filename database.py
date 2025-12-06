@@ -109,7 +109,7 @@ class Database:
         except Exception as e:
             print(f"❌ Error al obtener productos por categoría: {e}")
             return []
-        
+            
     # ===== PEDIDOS =====
     def generate_order_code(self) -> str:
         """Generar código único para pedido"""
