@@ -7,12 +7,12 @@ def main():
     try:
         Config.validate()
     except ValueError as e:
-        print(f"❌ Error de configuración: {e}")
+        print(f"❌❌ Error de configuración: {e}")
         return
     
     # Crear y ejecutar el bot
     bot = RestaurantBot()
-    print("🤖 Bot iniciado. Presiona Ctrl+C para detener.")
+    print("🤖🤖 Bot iniciado")
     bot.run()
 
 if __name__ == '__main__':
