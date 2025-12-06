@@ -49,31 +49,35 @@ class Database:
             print(f"❌ Error al obtener usuario: {e}")
             return None
     
-    def get_or_create_user(self, telegram_id: int, full_name: str, username: str = None) -> Dict:
+    def get_or_create_user(self, telegram_id: int, full_name: str, role: str = "cliente") -> Dict:
         """Obtener o crear usuario si no existe"""
-        user = self.get_user(telegram_id)
-        
-        if not user:
+        try:
+            # Intentar obtener usuario existente
+            response = self.supabase.table("users")\
+                .select("*")\
+                .eq("telegram_id", telegram_id)\
+                .execute()
+            
+            if response.data:
+                return response.data[0]
+            
+            # Crear nuevo usuario
             user_data = {
                 "telegram_id": telegram_id,
                 "full_name": full_name,
-                "username": username,
-                "role": "cliente"
+                "role": role
             }
             
-            try:
-                response = self._client.table("users")\
-                    .insert(user_data)\
-                    .execute()
-                
-                user = response.data[0] if response.data else None
-                print(f"✅ Usuario creado: {full_name}")
-            except Exception as e:
-                print(f"❌ Error al crear usuario: {e}")
-                return None
+            response = self.supabase.table("users")\
+                .insert(user_data)\
+                .execute()
+            
+            return response.data[0] if response.data else None
+            
+        except Exception as e:
+            print(f"❌ Error al crear usuario: {e}")
+            return None
         
-        return user
-    
     def update_user_role(self, telegram_id: int, role: str) -> Optional[Dict]:
         """Actualizar rol de usuario (solo admin)"""
         try:
