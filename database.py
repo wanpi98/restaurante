@@ -83,7 +83,7 @@ class Database:
             print(f"❌ Error al obtener productos: {e}")
             return []
     
-    def get_product(self, product_id: int) -> Optional[Dict]:
+    def get_products(self, product_id: int) -> Optional[Dict]:
         """Obtener un producto por ID"""
         try:
             response = self._client.table("products")\
@@ -96,6 +96,20 @@ class Database:
             print(f"❌ Error al obtener producto: {e}")
             return None
     
+    def get_products_by_category(self, category: str) -> List[Dict]:
+        """Obtener productos por categoría"""
+        try:
+            response = self._client.table("products")\
+                .select("*")\
+                .eq("category", category)\
+                .eq("is_available", True)\
+                .execute()
+            
+            return response.data
+        except Exception as e:
+            print(f"❌ Error al obtener productos por categoría: {e}")
+            return []
+        
     # ===== PEDIDOS =====
     def generate_order_code(self) -> str:
         """Generar código único para pedido"""
@@ -122,7 +136,7 @@ class Database:
                 if not product_id:
                     continue
                     
-                product = self.get_product(product_id)
+                product = self.get_products(product_id)
                 if product:
                     # Formatear item para la base de datos
                     order_item = {
