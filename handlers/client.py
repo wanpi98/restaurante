@@ -11,15 +11,17 @@ def setup_client_handlers(application, db):
     
     # Comandos del cliente
     application.add_handler(CommandHandler("start", lambda update, context: start_handler(update, context, db)))
-    application.add_handler(CommandHandler("menu", menu_handler))
+    application.add_handler(CommandHandler("menu", lambda update, context: menu_handler(update, context, db)))
     application.add_handler(CommandHandler("carrito", carrito_handler))
     application.add_handler(CommandHandler("pedir", lambda update, context: pedir_handler(update, context, db)))
     application.add_handler(CommandHandler("limpiar", limpiar_handler))
     
     # Manejadores de callback para botones
-    application.add_handler(CallbackQueryHandler(categoria_callback, pattern="^categoria_"))
+    application.add_handler(CallbackQueryHandler(lambda update, context: categoria_callback(update, context, db), pattern="^categoria_"))
     application.add_handler(CallbackQueryHandler(producto_callback, pattern="^producto_"))
     application.add_handler(CallbackQueryHandler(cantidad_callback, pattern="^cantidad_"))
+    application.add_handler(CallbackQueryHandler(carrito_callback, pattern="^carrito$"))
+    application.add_handler(CallbackQueryHandler(lambda update, context: volver_categorias_callback(update, context, db), pattern="^volver_categorias$"))
     
     # Manejador de mensajes de texto
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -39,7 +41,7 @@ async def start_handler(update: Update, context: CallbackContext, db) -> None:
     if args and len(args) > 0:
         mesa = args[0]
         context.user_data['mesa_actual'] = mesa
-        welcome_text = f"""¡Hola {user.first_name}! 👋
+        welcome_text = f"""¡Hola {user.first_name}! 👋👋
 
 Bienvenido al sistema de pedidos del restaurante.
 
@@ -47,7 +49,7 @@ Bienvenido al sistema de pedidos del restaurante.
 
 Usa /menu para ver el menú disponible"""
     else:
-        welcome_text = f"""¡Hola {user.first_name}! 👋
+        welcome_text = f"""¡Hola {user.first_name}! 👋👋
 
 Para comenzar, escanea el código QR de tu mesa o escribe:
 /start mesa_5
@@ -56,33 +58,25 @@ Para comenzar, escanea el código QR de tu mesa o escribe:
     
     await update.message.reply_text(welcome_text)
 
-async def menu_handler(update: Update, context: CallbackContext) -> None:
+async def menu_handler(update: Update, context: CallbackContext, db) -> None:
     """Mostrar menú con botones de categorías"""
     try:
         # Verificar que el usuario esté en una mesa
         if 'mesa_actual' not in context.user_data:
             await update.message.reply_text(
-                "❌ Primero necesitas registrar una mesa.\n"
+                "❌❌ Primero necesitas registrar una mesa.\n"
                 "Usa: /start mesa_1"
             )
             return
         
-        # Obtener productos de la base de datos (aquí deberías usar tu DB)
-        productos_ejemplo = [
-            {'id': 1, 'name': 'Hamburguesa', 'price': 10.0, 'category': 'Comida'},
-            {'id': 2, 'name': 'Pizza', 'price': 15.0, 'category': 'Comida'},
-            {'id': 3, 'name': 'Refresco', 'price': 3.0, 'category': 'Bebidas'},
-            {'id': 4, 'name': 'Café', 'price': 2.0, 'category': 'Bebidas'},
-            {'id': 5, 'name': 'Ensalada', 'price': 8.0, 'category': 'Comida'},
-        ]
-        
-        from collections import defaultdict
-        products = productos_ejemplo
+        # Obtener productos de la base de datos
+        products = db.get_products()
         
         if not products:
-            await update.message.reply_text("📭 El menú está vacío en este momento.")
+            await update.message.reply_text("📭📭 El menú está vacío en este momento.")
             return
         
+        from collections import defaultdict
         # Agrupar por categoría
         by_category = defaultdict(list)
         for product in products:
@@ -106,21 +100,21 @@ async def menu_handler(update: Update, context: CallbackContext) -> None:
             )])
         
         # Agregar botón para ver carrito
-        keyboard.append([InlineKeyboardButton("🛒 Ver Carrito", callback_data="carrito")])
+        keyboard.append([InlineKeyboardButton("🛒🛒🛒 Ver Carrito", callback_data="carrito")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "📁 *SELECCIONA UNA CATEGORÍA*",
+            "📁📁 *SELECCIONA UNA CATEGORÍA*",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         
     except Exception as e:
         logger.error(f"Error al obtener menú: {e}")
-        await update.message.reply_text("❌ Error al cargar el menú.")
+        await update.message.reply_text("❌❌ Error al cargar el menú.")
 
-async def categoria_callback(update: Update, context: CallbackContext) -> None:
+async def categoria_callback(update: Update, context: CallbackContext, db) -> None:
     """Manejar clic en botón de categoría"""
     query = update.callback_query
     await query.answer()
@@ -128,8 +122,8 @@ async def categoria_callback(update: Update, context: CallbackContext) -> None:
     categoria_nombre = query.data.replace('categoria_', '')
     
     try:
-        by_category = context.user_data.get('productos_por_categoria', {})
-        productos_categoria = by_category.get(categoria_nombre, [])
+        # Obtener productos de la categoría desde la base de datos
+        productos_categoria = db.get_products_by_category(categoria_nombre)
         
         if not productos_categoria:
             await query.edit_message_text("No hay productos en esta categoría.")
@@ -154,21 +148,21 @@ async def categoria_callback(update: Update, context: CallbackContext) -> None:
         
         # Botones de navegación
         keyboard.append([
-            InlineKeyboardButton("⬅️ Volver a Categorías", callback_data="volver_categorias"),
-            InlineKeyboardButton("🛒 Ver Carrito", callback_data="carrito")
+            InlineKeyboardButton("⬅⬅️ Volver a Categorías", callback_data="volver_categorias"),
+            InlineKeyboardButton("🛒🛒🛒 Ver Carrito", callback_data="carrito")
         ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            f"🍽 *{categoria_nombre.upper()}*\nSelecciona un producto:",
+            f"🍽🍽 *{categoria_nombre.upper()}*\nSelecciona un producto:",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         
     except Exception as e:
         logger.error(f"Error al mostrar categoría: {e}")
-        await query.edit_message_text("❌ Error al cargar la categoría.")
+        await query.edit_message_text("❌❌ Error al cargar la categoría.")
 
 async def producto_callback(update: Update, context: CallbackContext) -> None:
     """Manejar clic en botón de producto"""
@@ -187,7 +181,7 @@ async def producto_callback(update: Update, context: CallbackContext) -> None:
                 break
         
         if not producto_seleccionado:
-            await query.edit_message_text("❌ Producto no encontrado.")
+            await query.edit_message_text("❌❌ Producto no encontrado.")
             return
         
         # Guardar producto seleccionado temporalmente
@@ -206,8 +200,8 @@ async def producto_callback(update: Update, context: CallbackContext) -> None:
         
         # Botones de navegación
         keyboard.append([
-            InlineKeyboardButton("⬅️ Volver a Productos", callback_data=f"categoria_{context.user_data.get('ultima_categoria', '')}"),
-            InlineKeyboardButton("🛒 Ver Carrito", callback_data="carrito")
+            InlineKeyboardButton("⬅⬅️ Volver a Productos", callback_data=f"categoria_{context.user_data.get('ultima_categoria', '')}"),
+            InlineKeyboardButton("🛒🛒🛒 Ver Carrito", callback_data="carrito")
         ])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -216,10 +210,10 @@ async def producto_callback(update: Update, context: CallbackContext) -> None:
         precio = producto_seleccionado.get('price', 0)
         descripcion = producto_seleccionado.get('description', '')
         
-        mensaje = f"🍽 *{nombre}*\n"
+        mensaje = f"🍽🍽 *{nombre}*\n"
         mensaje += f"💰 Precio: ${precio:.2f}\n"
         if descripcion:
-            mensaje += f"📝 {descripcion}\n"
+            mensaje += f"📝📝 {descripcion}\n"
         mensaje += "\nSelecciona la cantidad:"
         
         await query.edit_message_text(
@@ -230,7 +224,7 @@ async def producto_callback(update: Update, context: CallbackContext) -> None:
         
     except Exception as e:
         logger.error(f"Error al seleccionar producto: {e}")
-        await query.edit_message_text("❌ Error al seleccionar el producto.")
+        await query.edit_message_text("❌❌ Error al seleccionar el producto.")
 
 async def cantidad_callback(update: Update, context: CallbackContext) -> None:
     """Manejar selección de cantidad"""
@@ -243,7 +237,7 @@ async def cantidad_callback(update: Update, context: CallbackContext) -> None:
         producto_seleccionado = context.user_data.get('producto_seleccionado')
         
         if not producto_seleccionado:
-            await query.edit_message_text("❌ No hay producto seleccionado.")
+            await query.edit_message_text("❌❌ No hay producto seleccionado.")
             return
         
         nombre = producto_seleccionado.get('name', 'Sin nombre')
@@ -274,8 +268,8 @@ async def cantidad_callback(update: Update, context: CallbackContext) -> None:
         
         # Crear botones para continuar
         keyboard = [
-            [InlineKeyboardButton("📁 Seguir Comprando", callback_data="volver_categorias")],
-            [InlineKeyboardButton("🛒 Ver Carrito", callback_data="carrito")],
+            [InlineKeyboardButton("📁📁 Seguir Comprando", callback_data="volver_categorias")],
+            [InlineKeyboardButton("🛒🛒🛒 Ver Carrito", callback_data="carrito")],
             [InlineKeyboardButton("✅ Confirmar Pedido", callback_data="confirmar_pedido")]
         ]
         
@@ -283,7 +277,7 @@ async def cantidad_callback(update: Update, context: CallbackContext) -> None:
         
         await query.edit_message_text(
             f"✅ *{nombre}*\n"
-            f"📦 Cantidad: {cantidad}\n"
+            f"📦📦 Cantidad: {cantidad}\n"
             f"💰 Total: ${precio * cantidad:.2f}\n\n"
             f"¡Añadido al carrito correctamente!",
             reply_markup=reply_markup,
@@ -292,7 +286,7 @@ async def cantidad_callback(update: Update, context: CallbackContext) -> None:
         
     except Exception as e:
         logger.error(f"Error al agregar al carrito: {e}")
-        await query.edit_message_text("❌ Error al agregar al carrito.")
+        await query.edit_message_text("❌❌ Error al agregar al carrito.")
 
 async def carrito_handler(update: Update, context: CallbackContext) -> None:
     """Ver contenido del carrito"""
@@ -302,11 +296,11 @@ async def mostrar_carrito(message, context: CallbackContext):
     """Función auxiliar para mostrar carrito"""
     try:
         if 'carrito' not in context.user_data or not context.user_data['carrito']:
-            keyboard = [[InlineKeyboardButton("📁 Ver Menú", callback_data="volver_categorias")]]
+            keyboard = [[InlineKeyboardButton("📁📁 Ver Menú", callback_data="volver_categorias")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await message.reply_text(
-                "🛒 Tu carrito está vacío.\n\n"
+                "🛒🛒🛒 Tu carrito está vacío.\n\n"
                 "¡Agrega algunos productos del menú!",
                 reply_markup=reply_markup
             )
@@ -315,7 +309,7 @@ async def mostrar_carrito(message, context: CallbackContext):
         carrito = context.user_data['carrito']
         
         total = 0
-        response = "🛒 *TU CARRITO*\n\n"
+        response = "🛒🛒🛒 *TU CARRITO*\n\n"
         response += "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         
         for i, item in enumerate(carrito, 1):
@@ -330,8 +324,8 @@ async def mostrar_carrito(message, context: CallbackContext):
         
         # Crear botones para el carrito
         keyboard = [
-            [InlineKeyboardButton("📁 Seguir Comprando", callback_data="volver_categorias")],
-            [InlineKeyboardButton("🗑 Vaciar Carrito", callback_data="vaciar_carrito")],
+            [InlineKeyboardButton("📁📁 Seguir Comprando", callback_data="volver_categorias")],
+            [InlineKeyboardButton("🗑🗑 Vaciar Carrito", callback_data="vaciar_carrito")],
             [InlineKeyboardButton("✅ Confirmar Pedido", callback_data="confirmar_pedido")]
         ]
         
@@ -345,7 +339,7 @@ async def mostrar_carrito(message, context: CallbackContext):
         
     except Exception as e:
         logger.error(f"Error al ver carrito: {e}")
-        await message.reply_text("❌ Error al cargar el carrito.")
+        await message.reply_text("❌❌ Error al cargar el carrito.")
 
 async def pedir_handler(update: Update, context: CallbackContext, db) -> None:
     """Confirmar y enviar el pedido"""
@@ -355,32 +349,51 @@ async def confirmar_pedido(message, context: CallbackContext, db):
     """Función auxiliar para confirmar pedido"""
     try:
         if 'carrito' not in context.user_data or not context.user_data['carrito']:
-            await message.reply_text("❌ Tu carrito está vacío.")
+            await message.reply_text("❌❌ Tu carrito está vacío.")
             return
         
         if 'mesa_actual' not in context.user_data:
-            await message.reply_text("❌ Primero necesitas registrar una mesa.")
+            await message.reply_text("❌❌ Primero necesitas registrar una mesa.")
             return
         
         # Pedir nombre del cliente si no está en user_data
         if 'nombre_cliente' not in context.user_data:
             context.user_data['pendiente_confirmacion'] = True
             await message.reply_text(
-                "📝 Por favor, ingresa tu nombre para el pedido:"
+                "📝📝 Por favor, ingresa tu nombre para el pedido:"
             )
             return
         
-        # ... (resto del código de confirmación igual que antes)
+        # Crear pedido en la base de datos
+        pedido_id = db.create_order(
+            user_id=message.from_user.id,
+            mesa=context.user_data['mesa_actual'],
+            nombre_cliente=context.user_data['nombre_cliente'],
+            items=context.user_data['carrito'],
+            total=sum(item['precio'] * item['cantidad'] for item in context.user_data['carrito'])
+        )
+        
+        # Limpiar carrito después de confirmar
+        context.user_data['carrito'] = []
+        
+        await message.reply_text(
+            f"✅✅ *Pedido confirmado!*\n\n"
+            f"📋 Número de pedido: *{pedido_id}*\n"
+            f"👤 Cliente: *{context.user_data['nombre_cliente']}*\n"
+            f"📍 Mesa: *{context.user_data['mesa_actual']}*\n\n"
+            f"¡Tu pedido está en camino! 🚀",
+            parse_mode='Markdown'
+        )
         
     except Exception as e:
         logger.error(f"Error al confirmar pedido: {e}")
-        await message.reply_text("❌ Error al confirmar el pedido.")
+        await message.reply_text("❌❌ Error al confirmar el pedido.")
 
 async def limpiar_handler(update: Update, context: CallbackContext) -> None:
     """Vaciar el carrito"""
     if 'carrito' in context.user_data:
         context.user_data['carrito'] = []
-        await update.message.reply_text("🗑 Carrito vaciado correctamente.")
+        await update.message.reply_text("🗑🗑 Carrito vaciado correctamente.")
     else:
         await update.message.reply_text("✅ El carrito ya está vacío.")
 
@@ -408,29 +421,23 @@ async def carrito_callback(update: Update, context: CallbackContext) -> None:
     await query.answer()
     await mostrar_carrito(query.message, context)
 
-async def volver_categorias_callback(update: Update, context: CallbackContext) -> None:
+async def volver_categorias_callback(update: Update, context: CallbackContext, db) -> None:
     """Manejar clic en botón de volver a categorías"""
     query = update.callback_query
     await query.answer()
-    await menu_handler_from_callback(query, context)
+    await menu_handler_from_callback(query, context, db)
 
-async def menu_handler_from_callback(query, context: CallbackContext):
+async def menu_handler_from_callback(query, context: CallbackContext, db):
     """Mostrar menú desde callback"""
     try:
-        # Obtener productos (usando datos de ejemplo)
-        productos_ejemplo = [
-            {'id': 1, 'name': 'Hamburguesa', 'price': 10.0, 'category': 'Comida'},
-            {'id': 2, 'name': 'Pizza', 'price': 15.0, 'category': 'Comida'},
-            {'id': 3, 'name': 'Refresco', 'price': 3.0, 'category': 'Bebidas'},
-        ]
-        
-        from collections import defaultdict
-        products = productos_ejemplo
+        # Obtener productos de la base de datos
+        products = db.get_products()
         
         if not products:
-            await query.edit_message_text("📭 El menú está vacío en este momento.")
+            await query.edit_message_text("📭📭 El menú está vacío en este momento.")
             return
         
+        from collections import defaultdict
         # Agrupar por categoría
         by_category = defaultdict(list)
         for product in products:
@@ -448,37 +455,16 @@ async def menu_handler_from_callback(query, context: CallbackContext):
                 callback_data=f"categoria_{category}"
             )])
         
-        keyboard.append([InlineKeyboardButton("🛒 Ver Carrito", callback_data="carrito")])
+        keyboard.append([InlineKeyboardButton("🛒🛒🛒 Ver Carrito", callback_data="carrito")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            "📁 *SELECCIONA UNA CATEGORÍA*",
+            "📁📁 *SELECCIONA UNA CATEGORÍA*",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         
     except Exception as e:
         logger.error(f"Error al mostrar menú: {e}")
-        await query.edit_message_text("❌ Error al cargar el menú.")
-
-# Actualizar el setup para incluir los nuevos handlers
-def setup_client_handlers(application, db):
-    """Configurar handlers del cliente con botones"""
-    
-    # Comandos del cliente
-    application.add_handler(CommandHandler("start", lambda update, context: start_handler(update, context, db)))
-    application.add_handler(CommandHandler("menu", menu_handler))
-    application.add_handler(CommandHandler("carrito", carrito_handler))
-    application.add_handler(CommandHandler("pedir", lambda update, context: pedir_handler(update, context, db)))
-    application.add_handler(CommandHandler("limpiar", limpiar_handler))
-    
-    # Manejadores de callback para botones
-    application.add_handler(CallbackQueryHandler(categoria_callback, pattern="^categoria_"))
-    application.add_handler(CallbackQueryHandler(producto_callback, pattern="^producto_"))
-    application.add_handler(CallbackQueryHandler(cantidad_callback, pattern="^cantidad_"))
-    application.add_handler(CallbackQueryHandler(carrito_callback, pattern="^carrito$"))
-    application.add_handler(CallbackQueryHandler(volver_categorias_callback, pattern="^volver_categorias$"))
-    
-    # Manejador de mensajes de texto
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        await query.edit_message_text("❌❌ Error al cargar el menú.")
